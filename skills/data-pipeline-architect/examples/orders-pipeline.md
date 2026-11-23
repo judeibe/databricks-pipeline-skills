@@ -227,6 +227,8 @@ A 30-minute cadence is below the 1-hour minimum for `trigger.periodic`, so this 
 
 ## 8. Backfill and recovery
 
+Commands below are illustrations for the user to run, or for you to run only after explicit approval.
+
 ```bash
 # Re-run the whole pipeline refresh (selective refresh of one table is preferred over full refresh)
 databricks bundle run orders_refresh -t dev --profile <PROFILE>
@@ -243,7 +245,7 @@ databricks bundle run orders_refresh -t dev --profile <PROFILE>
 #   DESCRIBE HISTORY gold.some_table;   RESTORE TABLE gold.some_table TO VERSION AS OF <n>;
 ```
 
-A **full refresh** of `bronze_orders` would reprocess every file and discard streaming state; only do it with explicit approval and when the files still exist in the Volume.
+A **full refresh** of `bronze_orders` would reprocess every file and reset streaming state. Leave that decision to the user, and only when the files still exist in the Volume.
 
 ## 9. Why this is safe
 
