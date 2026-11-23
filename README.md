@@ -26,7 +26,26 @@ npx skills add judeibe/databricks-pipeline-skills --skill data-pipeline-architec
 npx skills add judeibe/databricks-pipeline-skills --list
 ```
 
-The skills route to the Databricks product skills (`databricks-pipelines`, `databricks-jobs`, `databricks-dabs` and others) for exact API syntax, so install those too.
+## Databricks product skills
+
+These skills hold the architecture decisions and route to the official Databricks product skills (`databricks-pipelines`, `databricks-jobs`, `databricks-dabs` and others) for exact API and CLI syntax. Install those with the [Databricks CLI](https://docs.databricks.com/aws/en/agent-skills):
+
+```bash
+# all detected coding agents
+databricks aitools install
+
+# one agent
+databricks aitools install --agents claude-code
+
+# this project only, instead of globally
+databricks aitools install --scope project
+
+# keep them current
+databricks aitools list
+databricks aitools update
+```
+
+If you installed the deprecated AI Dev Kit skills, uninstall them first to avoid conflicts. Run `databricks aitools install --help` for the remaining flags, such as `--skills-only` and `--skills`.
 
 ## Layout
 
