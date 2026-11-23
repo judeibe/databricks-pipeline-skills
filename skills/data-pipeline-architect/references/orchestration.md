@@ -96,12 +96,14 @@ Triggers: `schedule` (Quartz cron, `pause_status`), `trigger.periodic` (interval
 - Define job-level `parameters` (they reach every task) and read them with `dbutils.widgets.get`, or pass them as task `base_parameters` using `{{job.parameters.name}}`.
 - Backfill a range by running the **same** job over historical parameters. Idempotent writes guarantee no duplicates.
 
+Example command for the user to run, or for you to run after explicit approval (it starts a real run that writes data):
+
 ```bash
 databricks jobs run-now --json '{"job_id": 123, "job_parameters": {"start_date": "2026-01-01", "end_date": "2026-01-31"}}' --profile <PROFILE>
 ```
 
 - In a pipeline, load history with a one-time append flow (`@dp.append_flow(once=True)`) beside the live flow.
-- Prefer **selective refresh** of one table over full refresh. Full refresh destroys streaming state and can lose data; never run it without explicit approval.
+- Prefer **selective refresh** of one table over full refresh. Full refresh resets streaming state, and rows the source no longer retains cannot be recovered. Do not run it yourself; recommend it only with the reason, and let the user decide.
 - Throttle concurrent backfill runs (`max_concurrent_runs`) so you do not hammer sources or warehouses.
 - **Repair** a failed multi-task run to re-run only the failed and skipped tasks. Repair applies to jobs with two or more tasks, uses current settings, and does not make tasks idempotent.
 
@@ -146,10 +148,13 @@ resources:
 ## Deployment workflow
 
 ```bash
+# Read-only: safe to run once the user has chosen a profile
 databricks bundle validate --strict -t dev --profile <PROFILE>
+databricks bundle summary  -t dev --profile <PROFILE>
+
+# Change the workspace: show the command, target and effect, and run only after explicit approval
 databricks bundle deploy   -t dev --profile <PROFILE>
 databricks bundle run orders_refresh -t dev --profile <PROFILE>
-databricks bundle summary  -t dev --profile <PROFILE>
 ```
 
 - Resource files are named `<name>.<type>.yml` (`orders.job.yml`, `orders_pipeline.pipeline.yml`) under `resources/` and included from `databricks.yml` with `include: [resources/*.yml]`.
@@ -157,7 +162,7 @@ databricks bundle summary  -t dev --profile <PROFILE>
 - Parameterise catalog, schema and warehouse with `variables:`, set per `targets:` (`dev` in development mode, `prod` in production mode). A `mode: production` target must set `workspace.root_path` or validation fails. Use the deploying identity's folder, for example `/Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}`; `/Workspace/Shared` is writable by all users and fails `--strict`.
 - Run `bundle validate --strict` after any configuration change. Code changes only take effect after `bundle deploy`.
 - Poll the **update** (`databricks pipelines get <id>`; the update's own state and its `error.exceptions[0].message`), not the pipeline's top-level state. A first serverless run can sit in `INITIALIZING` for a few minutes; that is normal.
-- `bundle destroy` is destructive; confirm the target first.
+- `bundle destroy` removes deployed resources. Never run it yourself; if cleanup is wanted, tell the user the command and target and let them run it.
 - Pass `--profile <PROFILE>` explicitly and let the user choose; never auto-select one.
 
 ## Observability

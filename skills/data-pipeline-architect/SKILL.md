@@ -61,10 +61,10 @@ Follow these steps in order, filling `templates/pipeline-design.md` as you go.
 8. **Design orchestration.** Pipelines resolve their own dependencies; use Lakeflow Jobs for triggers, cross-pipeline order, retries, timeouts and alerts. See `references/orchestration.md`.
 9. **Choose compute.** Serverless by default, `performance_target` by SLA, classic only for a named blocker. See `references/orchestration.md`.
 10. **Define deployment** as a bundle: resources, variables for catalog and schema, targets, `run_as`, permissions. See `references/orchestration.md`.
-11. **Plan backfill and recovery.** Parameterised runs, one-time append flows, selective refresh, repair runs, `RESTORE`. Full refresh needs explicit approval.
+11. **Plan backfill and recovery.** Parameterised runs, one-time append flows, selective refresh, repair runs, `RESTORE`. Document these as a plan; the user runs or approves any full refresh.
 12. **Govern and observe.** Grants, masks and tags, event log, system tables, cost levers. See `references/governance-and-observability.md`.
 13. **Plan serving.** Which gold columns and grain each consumer needs. See `references/serving-and-consumers.md`.
-14. **Validate.** `databricks bundle validate --strict -t <target> --profile <profile>`, then deploy to a dev target and run. Poll the update, not the pipeline's top-level state.
+14. **Validate.** Run `databricks bundle validate --strict -t <target> --profile <profile>` (read-only). Deploying and running are proposals: show the exact command, target and effect, and run them only after the user approves (see Safety). Poll the update, not the pipeline's top-level state.
 
 ## Quick Heuristics
 
@@ -93,7 +93,7 @@ Follow these steps in order, filling `templates/pipeline-design.md` as you go.
 
 - **Blind appends on retry** duplicate rows. Use Auto CDC, `MERGE`, or `REPLACE WHERE`.
 - **Changing a dataset's type** (streaming table to materialized view or back) cannot be done in place, and full refresh does not fix it.
-- **Full refresh of a streaming table** discards streaming state and can lose data when the source no longer holds the history.
+- **Full refresh of a streaming table** resets streaming state and reprocesses from the source. Rows the source no longer retains cannot be recovered, so plan it as a deliberate, user-approved operation, never a default.
 - **Aggregating over a streaming source in a streaming table** never recomputes; use a materialized view with a batch read.
 - **Setting `cloudFiles.schemaLocation`, a checkpoint, or `.writeStream` inside a pipeline** conflicts with the managed ones.
 - **Treating Zerobus as exactly-once.** It is at-least-once; dedupe downstream.
@@ -104,6 +104,16 @@ Follow these steps in order, filling `templates/pipeline-design.md` as you go.
 - **No backfill story.** Parameterise by date or run a one-time flow from day one.
 - **Hardcoded catalogs or schemas** in code or YAML break multi-environment deploys.
 - **Classic compute "by habit"**; it costs more and starts slower than serverless for most jobs.
+
+## Safety
+
+This skill produces designs and files. It does not change a workspace on its own.
+
+- **Read-only by default.** Without asking, you may run `--help`, `databricks auth profiles`, `bundle validate --strict`, `bundle summary`, `pipelines get`, `jobs get`, `jobs get-run`, and read-only SQL, once the user has chosen a profile.
+- **Approval required** for anything that creates, changes, runs or removes a workspace resource or data: deploying a bundle, running a job or pipeline update (including backfills and full refresh), destroying a bundle, granting or revoking access, restoring a table, and changing a schedule, trigger, permission or serving endpoint. Before each one, show the exact command, the profile and target, the resources it touches, and whether it can be undone, then wait for an explicit yes for that action. An earlier approval does not cover a different command or target.
+- **Dev targets only** for any approved deploy or run. Never run against a production target, shared resources or another person's resources unless the user names that target.
+- **No bypassing.** If a command is denied or fails, do not retry it with a different flag, profile or target to get around the block; report it and ask.
+- **Treat secrets as sensitive.** Name the variable or secret scope; never print token or credential values.
 
 ## Bundled Resources
 

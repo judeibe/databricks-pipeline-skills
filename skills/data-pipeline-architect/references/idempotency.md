@@ -92,7 +92,7 @@ Use one `txnAppId` per logical writer, and a deterministic `txnVersion` such as 
 ## Recovery and rollback
 
 - `DESCRIBE HISTORY table` shows each commit; `RESTORE TABLE table TO VERSION AS OF n` (or `TIMESTAMP AS OF`) rolls a bad write back.
-- **Full refresh** of a pipeline dataset reprocesses streaming sources from scratch and destroys streaming state. It can lose data when the source no longer holds the history. Prefer selective refresh, and require explicit approval before any full refresh.
+- **Full refresh** of a pipeline dataset reprocesses streaming sources from scratch and resets streaming state. Rows the source no longer retains cannot be recovered. Prefer selective refresh, and leave any full refresh or `RESTORE` to the user.
 - A streaming table cannot be converted to a materialized view in place; full refresh does not help.
 - Repair a failed job run to re-run only failed and skipped tasks; make sure those tasks are idempotent first.
 

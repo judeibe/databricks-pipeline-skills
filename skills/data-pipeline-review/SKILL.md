@@ -103,7 +103,7 @@ Per job and task: `max_retries` and `min_retry_interval_millis` are set delibera
 ### 5. Check backfill and recovery
 
 - A job-parameter or one-time-flow path exists (`@dp.append_flow(once=True)`) and runs through the same idempotent writes.
-- Selective refresh is preferred. **Any full refresh (`--full-refresh`, `full_refresh: true`) in a schedule or script is a blocker**: it destroys streaming state and can lose data when the source no longer holds history.
+- Selective refresh is preferred. **Any full refresh (`--full-refresh`, `full_refresh: true`) in a schedule or script is a blocker**: it resets streaming state, and rows the source no longer retains cannot be recovered.
 - Rollback exists: `DESCRIBE HISTORY` / `RESTORE`, within the table's retention window.
 - Repair of failed runs is safe because tasks are idempotent.
 - A streaming table cannot be converted to a materialized view in place; flag any plan that assumes it.
@@ -162,8 +162,9 @@ Produce the report in `templates/review-report.md`:
 
 ## Safety
 
-- Review is read-only. Never run `bundle deploy`, `bundle run`, `bundle destroy`, `jobs run-now`, `pipelines start-update`, any full refresh, `RESTORE`, `VACUUM`, `GRANT`/`REVOKE`, endpoint create or update, or alias moves without explicit approval. Describe them instead.
-- `--help`, `bundle validate --strict`, `pipelines get`, `jobs get-run` and read-only SQL are acceptable once the user has chosen a profile.
+- This skill only reads and reports. It does not deploy, run, refresh, restore, delete, grant, revoke or modify any workspace resource, table, endpoint or model alias. Put the recommended change in the findings table for the user to carry out.
+- Allowed once the user has chosen a profile: `--help`, `bundle validate --strict`, `bundle summary`, `pipelines get`, `jobs get`, `jobs get-run`, and read-only SQL (`SELECT`, `DESCRIBE`, `SHOW`). Anything else needs a specific, explicit yes from the user for that exact command and target.
+- If a command is denied or fails, do not retry it with a different flag, profile or target; report it and ask.
 - Treat tokens, secret values, connection strings and sample data as sensitive: name the variable or column, redact the value.
 - Never relax or delete a failing expectation or constraint to make a run green; investigate the data.
 - Do not change schedules, triggers, permissions or production targets without sign-off.
