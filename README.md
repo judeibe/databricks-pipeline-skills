@@ -1,5 +1,7 @@
 # databricks-pipeline-skills
 
+[![skills.sh](https://skills.sh/b/judeibe/databricks-pipeline-skills)](https://skills.sh/judeibe/databricks-pipeline-skills)
+
 Agent skills for designing and reviewing data pipelines on Databricks.
 
 | Skill | Use it to |

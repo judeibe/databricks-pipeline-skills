@@ -1,6 +1,7 @@
 ---
 name: data-pipeline-review
 description: Reviews and audits existing Databricks data and ML pipelines against Databricks methodology - Lakeflow Spark Declarative Pipelines (streaming tables, materialized views, Auto CDC, expectations), Auto Loader, Lakeflow Jobs, Declarative Automation Bundles, serverless compute, Unity Catalog, MLflow and Model Serving. Use this skill when the user asks to review, audit, check or find problems in a Databricks pipeline, job, bundle, notebook or model; investigate duplicate rows, gaps, stale data, wrong counts or schema drift; verify idempotency, retries, repair or backfill safety; check expectations, quarantine, freshness or reconciliation; review run_as, permissions, compute, catalogs or PII handling; check lineage and reproducibility; or audit MLflow training (leakage, registry aliases) and model serving rollout. For designing a new pipeline use data-pipeline-architect.
+license: MIT
 ---
 
 # Data Pipeline Review (Databricks)
