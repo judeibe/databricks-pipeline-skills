@@ -15,13 +15,13 @@ Install with the [skills CLI](https://www.skills.sh/docs):
 
 ```bash
 # both skills
-npx skills add OWNER/databricks-pipeline-skills
+npx skills add judeibe/databricks-pipeline-skills
 
 # one skill
-npx skills add OWNER/databricks-pipeline-skills --skill data-pipeline-architect
+npx skills add judeibe/databricks-pipeline-skills --skill data-pipeline-architect
 
 # list what the repo offers without installing
-npx skills add OWNER/databricks-pipeline-skills --list
+npx skills add judeibe/databricks-pipeline-skills --list
 ```
 
 The skills route to the Databricks product skills (`databricks-pipelines`, `databricks-jobs`, `databricks-dabs` and others) for exact API syntax, so install those too.
