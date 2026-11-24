@@ -34,7 +34,7 @@ Rules that bite:
 - An aggregation over a streaming source belongs in a materialized view with a batch read, because streaming tables are append-only and will not recompute aggregates when upstream rows change.
 - Gold keeps the business dimensions people filter by (location, product, segment, time). Over-aggregating loses information that cannot be recovered.
 - Materialized view incremental refresh needs **serverless** compute and Delta row tracking on the sources. Tables the pipeline creates have row tracking on by default; set `delta.enableRowTracking = true` only on sources from outside the pipeline. Non-deterministic functions, and filtering on **both** ends of a date range, force a full recompute; the MV query profile shows why a refresh was not incremental.
-- Changing a stateful streaming query (watermark, aggregation or dedup keys) makes existing state incompatible and needs a full refresh of that table. Keep bronze minimal and source-faithful so silver and gold can always be rebuilt from it.
+- Changing a stateful streaming query (watermark, aggregation or dedup keys) makes existing state incompatible and needs a full refresh of that table, which the user approves and runs. Keep bronze minimal and source-faithful so silver and gold can always be rebuilt from it.
 - SQL does not support `CREATE OR REPLACE STREAMING TABLE`; use `CREATE OR REFRESH`.
 
 ## Batch vs streaming trigger

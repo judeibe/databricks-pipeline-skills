@@ -12,7 +12,7 @@ Load `databricks-unity-catalog` for the commands. This file says what a pipeline
 ## Access control
 
 - Run production pipelines and jobs as a **service principal** (`run_as`), not a person. The deploying identity may need the Service Principal User role on it. Pipelines can also run as an account group.
-- Grant to **groups**, at the narrowest securable that works, least privilege. Example for a consumer group:
+- Grant to **groups**, at the narrowest securable that works, least privilege. Present grants as proposed SQL for the owner to review and run; do not execute them yourself. Example for a consumer group:
 
 ```sql
 GRANT USE CATALOG ON CATALOG analytics TO `data_readers`;
@@ -65,6 +65,6 @@ Tag pipelines and jobs (`tags:` in the bundle: team, environment, product) so bi
 - Liquid clustering (or `CLUSTER BY AUTO`) to prune scans; avoid over-partitioning.
 - Predicate and column pruning in gold reads; pre-aggregate wide fact tables only when queries need it.
 - Lakeflow Connect is billed in DBUs; database connectors add classic-compute gateway DBUs on top of the serverless ingestion pipeline.
-- Clean up dev bundles (`bundle destroy -t dev`) after experiments, and give dev targets short retention. Deleting a Unity Catalog pipeline **keeps** its streaming tables, materialized views and views by default; they stop updating and keep costing storage. Drop them explicitly (or delete with `cascade`) once you have confirmed nothing reads them.
+- Recommend cleaning up dev bundles after experiments (the user runs `bundle destroy -t dev`), and give dev targets short retention. Deleting a Unity Catalog pipeline **keeps** its streaming tables, materialized views and views by default; they stop updating and keep costing storage. Once nothing reads them, propose dropping them explicitly (or deleting with `cascade`) for the user to run.
 - With predictive optimization on (the default for UC managed tables), remove scheduled `OPTIMIZE` and `VACUUM` jobs; they duplicate work.
 - Review the budget with `system.billing.usage` before and after a change.

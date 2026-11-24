@@ -92,7 +92,7 @@ Use one `txnAppId` per logical writer, and a deterministic `txnVersion` such as 
 ## Recovery and rollback
 
 - `DESCRIBE HISTORY table` shows each commit; `RESTORE TABLE table TO VERSION AS OF n` (or `TIMESTAMP AS OF`) rolls a bad write back.
-- **Full refresh** of a pipeline dataset reprocesses streaming sources from scratch and destroys streaming state. It can lose data when the source no longer holds the history. Prefer selective refresh, and require explicit approval before any full refresh.
+- **Full refresh** of a pipeline dataset reprocesses streaming sources from scratch and resets streaming state. Rows the source no longer retains cannot be recovered. Prefer selective refresh, and leave any full refresh or `RESTORE` to the user.
 - **Rewind** (Beta, PREVIEW channel, `pipelines.rewind.betaEnabled = true`) snapshots pipeline metadata and source offsets so you can roll back and reprocess from a point in time instead of a full refresh. Do not make a Beta feature the only recovery path.
 - Changes that no longer need a full refresh: Delta type widening (`INT` to `BIGINT`), and column-level `ALTER TABLE` on streaming tables (Beta, metadata-only). Changing a stateful query's watermark or keys still does.
 - Deleting a pipeline keeps its tables by default; they stop updating but are not dropped.

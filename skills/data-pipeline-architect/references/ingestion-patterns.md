@@ -92,7 +92,7 @@ STORED AS SCD TYPE 1;
 - Multi-column ordering: `SEQUENCE BY STRUCT(col1, col2)` in SQL, `struct("col1", "col2")` in Python.
 - SCD Type 2 adds `__START_AT` and `__END_AT`; current rows are `WHERE __END_AT IS NULL`. Use `track_history_column_list` / `TRACK HISTORY ON` to limit which columns create history rows.
 - **Periodic full snapshots** (daily extract compared with the previous state): `dp.create_auto_cdc_from_snapshot_flow` (Python) or SQL `AUTO CDC ... FROM SNAPSHOT`; check the runtime and channel requirement in `databricks-pipelines`. Expectations are not supported on snapshot CDC, so validate in the upstream view.
-- The sequence column must never be NULL and must keep the same type across runs; changing `keys` or the sequence type needs a full refresh of the target.
+- The sequence column must never be NULL and must keep the same type across runs; changing `keys` or the sequence type needs a full refresh of the target, which the user approves and runs.
 - For append-only streams with no semantic updates, `dropDuplicates` / `SELECT DISTINCT` is cheaper than Auto CDC.
 - Legacy names (`apply_changes`, `APPLY CHANGES INTO`, `import dlt`, `LIVE.`) must be migrated, not extended.
 
