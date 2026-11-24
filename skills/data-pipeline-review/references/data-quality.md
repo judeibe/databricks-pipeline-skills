@@ -34,11 +34,18 @@ Expect gates at each boundary: ingest to bronze (schema match, row count, freshn
 | drop (`expect_or_drop`, `ON VIOLATION DROP ROW`) | violating rows removed | cleansing where some loss is acceptable, ideally with quarantine |
 | fail (`expect_or_fail`, `FAIL UPDATE`) | the update stops | invariants that must never reach consumers |
 
-Warn-only on a load-bearing table is a finding. Expectation conditions must be SQL expressions: no Python UDFs, subqueries or external calls. A SQL `CREATE TEMPORARY VIEW` does not accept `CONSTRAINT`; the expectation belongs on the table or materialized view that reads it.
+Warn-only on a load-bearing table is a finding. Expectation conditions must be SQL expressions: no Python UDFs, subqueries over other tables or external calls; aggregate checks (uniqueness, row counts, missing keys) belong in a materialized view with `expect_or_fail`.
+
+Also flag:
+
+- Expectations where they do not run: sinks, `AUTO CDC ... FROM SNAPSHOT`, tables targeted by a `REPLACE WHERE` flow. They silently check nothing.
+- `expect_or_fail` relied on to halt the whole pipeline. In triggered mode only the failing flow rolls back; independent flows still publish. Work that must stop needs a separate pipeline or a job task with `depends_on`.
+- Datasets that can receive bad data with no expectation at all.
+- Rules copied between datasets by hand instead of loaded from one table or module (`get_rules(tag)` pattern).
 
 ### 4. Check quarantine
 
-Dropped rows should land somewhere observable. Confirm the quarantine predicate uses `coalesce(..., false)` so NULL results go to quarantine rather than vanishing, and that something alerts when quarantine grows.
+Dropped rows should land somewhere observable. Confirm the quarantine predicate uses `coalesce(..., false)` so NULL results go to quarantine rather than vanishing, that it is derived from the same rules as the clean path (a hand-written inverse drifts), and that something alerts when quarantine grows.
 
 ### 5. Check what is not a row rule
 
@@ -53,7 +60,7 @@ Dropped rows should land somewhere observable. Confirm the quarantine predicate 
 
 ### 6. Check whether results are visible and the checks are tested
 
-Expectation metrics appear in the pipeline Data quality tab and the event log (`event_log('<pipeline_id>')`, `flow_progress` events). Confirm someone reads them. Confirm the checks were tested with injected bad rows (nulls in keys, negative amounts, malformed JSON, a new column), for example generated with `databricks-synthetic-data-gen`.
+Expectation metrics appear in the pipeline Data quality tab and the event log (`event_log('<pipeline_id>')`, `flow_progress` events). Confirm someone reads them. Confirm the checks were tested, with pipeline Python unit tests (Beta) or with injected bad rows (nulls in keys, negative amounts, malformed JSON, a new column), for example generated with `databricks-synthetic-data-gen`.
 
 ## Concrete checks
 

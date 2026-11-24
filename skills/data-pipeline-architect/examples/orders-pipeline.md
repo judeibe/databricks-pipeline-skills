@@ -1,6 +1,6 @@
 # Worked Example: Orders Pipeline on Databricks
 
-**Scenario:** An operational `orders` table is replicated as JSON change files (one row per insert, update or delete, with an `op` flag and an `updated_at` timestamp) into a Unity Catalog Volume. Finance needs daily revenue dashboards, and a churn model needs order history. About 2M changed rows a day, about 3 GB a day, freshness SLA 1 hour, no PII beyond a pseudonymous `customer_id`.
+**Scenario:** An operational `orders` table is replicated as JSON change files (one row per insert, update or delete, with an `op` flag, the order's `order_ts` creation time, and an `updated_at` change timestamp) into a Unity Catalog Volume. Finance needs daily revenue dashboards, and a churn model needs order history. About 2M changed rows a day, about 3 GB a day, freshness SLA 1 hour, no PII beyond a pseudonymous `customer_id`.
 
 If a managed Lakeflow Connect connector exists for the source database, use it for step 2 instead and build silver and gold on its landing tables (`databricks-lakeflow-connect`).
 
@@ -42,7 +42,7 @@ def bronze_orders():
     return (
         spark.readStream.format("cloudFiles")
         .option("cloudFiles.format", "json")
-        .option("cloudFiles.schemaHints", "order_id BIGINT, amount DECIMAL(12,2), updated_at TIMESTAMP")
+        .option("cloudFiles.schemaHints", "order_id BIGINT, amount DECIMAL(12,2), order_ts TIMESTAMP, updated_at TIMESTAMP")
         .option("cloudFiles.schemaEvolutionMode", "addNewColumns")
         .load(SOURCE_PATH)
         .withColumn("_ingested_at", F.current_timestamp())
@@ -59,6 +59,9 @@ RULES = {
     "valid_amount": "amount IS NULL OR amount >= 0",
     "has_status": "status IN ('placed', 'shipped', 'cancelled')",
 }
+# Inverse of RULES, built from the same dict so the clean and quarantine paths cannot drift.
+# coalesce(..., false) sends a NULL rule result to quarantine instead of losing the row.
+QUARANTINE = "_rescued_data IS NOT NULL OR NOT coalesce(" + " AND ".join(f"({r})" for r in RULES.values()) + ", false)"
 
 
 @dp.temporary_view()
@@ -72,7 +75,6 @@ dp.create_streaming_table(
     name="silver_orders",
     comment="Latest version of each order; deletes applied.",
     cluster_by=["order_id"],
-    table_properties={"delta.enableRowTracking": "true"},
 )
 
 dp.create_auto_cdc_flow(
@@ -85,13 +87,10 @@ dp.create_auto_cdc_flow(
 )
 
 
-# Quarantine: nothing is silently lost. The filter is the inverse of the rules above (plus rescued data).
+# Quarantine: nothing is silently lost.
 @dp.table(name="silver_orders_quarantine", comment="Rows that failed parsing or value rules.")
 def silver_orders_quarantine():
-    return spark.readStream.table("bronze_orders").where(
-        "_rescued_data IS NOT NULL "
-        "OR NOT coalesce((amount IS NULL OR amount >= 0) AND status IN ('placed','shipped','cancelled'), false)"
-    )
+    return spark.readStream.table("bronze_orders").where(QUARANTINE)
 ```
 
 ```python
@@ -108,7 +107,7 @@ from pyspark.sql import functions as F
 def gold_daily_revenue():
     return (
         spark.read.table("silver_orders")
-        .withColumn("order_date", F.to_date("updated_at"))
+        .withColumn("order_date", F.to_date("order_ts"))   # when the order was placed, not when it last changed
         .groupBy("order_date", "region", "status")
         .agg(F.sum("amount").alias("revenue"), F.count("*").alias("orders"))
     )
@@ -116,8 +115,10 @@ def gold_daily_revenue():
 
 Notes:
 - Datasets are referenced by bare name inside the pipeline; the pipeline's default catalog and schema apply.
-- The temporary view carries the expectations because the CDC flow cannot read a subquery, and a SQL temp view would not accept constraints; in Python the decorators work on the view.
-- Row tracking on `silver_orders` lets the gold materialized view refresh incrementally (serverless only).
+- The temporary view carries the expectations because the CDC flow cannot read a subquery; expectations decorators work on Python temporary views.
+- Revenue is dated by `order_ts`. Grouping by `updated_at` would move an order's revenue to the day it was last changed (for example cancelled).
+- Pipeline-created tables have row tracking on by default, so the gold materialized view refreshes incrementally on serverless without extra table properties.
+- Each function only returns a DataFrame: no `count()`, `collect()` or writes, and no `try`/`except` around the logic.
 
 ## 5. Bundle resources
 
@@ -136,6 +137,8 @@ variables:
     description: Schema for this bundle's tables
   notification_email:
     description: Failure notification address
+  prod_service_principal:
+    description: Application ID of the service principal that runs production
 
 targets:
   dev:
@@ -151,10 +154,18 @@ targets:
       # Required in production mode. Use the deploying identity's folder (a CI service principal in practice);
       # /Workspace/Shared is writable by everyone and fails --strict.
       root_path: /Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}
+    run_as:
+      service_principal_name: ${var.prod_service_principal}
+    permissions:
+      - group_name: finance-data-engineers
+        level: CAN_MANAGE
+      - group_name: finance-data-oncall
+        level: CAN_RUN
     variables:
       catalog: prod_main
       schema: orders
       notification_email: data-oncall@example.com
+      prod_service_principal: 00000000-0000-0000-0000-000000000000   # replace with the real application ID
 ```
 
 ```yaml
@@ -173,6 +184,9 @@ resources:
             include: ../src/orders_pipeline/transformations/**
       configuration:
         orders_source_path: /Volumes/${var.catalog}/${var.schema}/raw/orders/
+      notifications:
+        - email_recipients: ["${var.notification_email}"]
+          alerts: ["on-update-failure", "on-update-fatal-failure", "on-flow-failure"]
       tags:
         team: finance-data
 ```
@@ -256,5 +270,6 @@ A **full refresh** of `bronze_orders` would reprocess every file and discard str
 ## 10. Variations
 
 - **Event stream instead of files:** replace Auto Loader with a Kafka/Kinesis/Event Hubs streaming read, or let producers push through Zerobus (at-least-once, so keep the Auto CDC dedupe).
+- **Governed revenue KPIs:** define a metric view over `silver_orders` (or `gold_daily_revenue`) after the pipeline, with `MEASURE()`-queried revenue and distinct-customer measures; see `references/serving-and-consumers.md`.
 - **Daily full extract instead of changes:** read the latest extract with a materialized view and use `create_auto_cdc_from_snapshot_flow`.
 - **Reverse ETL for an app:** sync `silver_orders` into Lakebase with a synced table (enable change data feed on the source).

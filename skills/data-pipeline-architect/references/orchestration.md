@@ -15,7 +15,15 @@ source ─ingest─▶ BRONZE (raw, append-only streaming tables, minimal typing
 - Gold is consumer-facing and contract-stable; keep business dimensions.
 - Separate layers by catalog or schema, and parameterise them with bundle variables (`${var.catalog}`, `${var.schema}`). Never hardcode them.
 - SDP resolves dependencies **inside** one pipeline from the table references, so do not model them as job tasks. Use job tasks for ordering **between** pipelines and non-pipeline work.
-- One dataset per file, named after the dataset. Default to a few tables; do not over-split.
+- One dataset per file, named after the dataset.
+
+### How big should one pipeline be?
+
+A triggered update runs at most **16 dataset updates in parallel**; more queue and stretch wall-clock time even when compute is free.
+
+- **Keep together:** one domain's connected DAG that shares a cadence and trigger, under the 16-update ceiling.
+- **Split** at ownership (team or domain), layer (bronze ingestion apart from silver/gold, so an ingestion failure does not block transformation), and latency (continuous apart from daily batch) boundaries, or when a pipeline would pass 16 parallel updates.
+- Prefer a few medium, domain-aligned pipelines over one monolith. Order split pipelines with job tasks, and watch them together through `system.lakeflow.pipelines` and `system.lakeflow.job_run_timeline`.
 
 ## What orchestrates what
 
@@ -125,14 +133,29 @@ resources:
       configuration:
         source_catalog: ${var.source_catalog}
         source_schema: ${var.source_schema}
+      notifications:
+        - email_recipients: ["${var.notification_email}"]
+          alerts: ["on-update-failure", "on-update-fatal-failure", "on-flow-failure"]
       tags:
         team: data-engineering
 ```
 
-- Use `schema`, not the deprecated `target`. Read configuration in code with `spark.conf.get("source_catalog")`; values are strings.
+Source layout under `root_path`:
+
+```
+src/orders_pipeline/
+  transformations/   # dataset definitions only; every file here is evaluated on each update
+  utilities/         # plain PySpark functions, importable and unit-tested with pytest
+  explorations/      # notebooks and ad hoc queries; never referenced by libraries
+```
+
+Keep transformation logic in `utilities/` as plain functions that take and return DataFrames, and make each `transformations/` file a thin `@dp` wrapper around them.
+
+- Use `schema`, not the deprecated `target`; new pipelines use the default publishing mode. Read `configuration` values in Python with `spark.conf.get("source_catalog")` and in SQL with `${source_catalog}`; values are strings. SQL can also use the pipeline `parameters` map as `:source_catalog` or `IDENTIFIER(:source_catalog)`. Job run parameters override job parameters, which override pipeline task parameters, which override pipeline parameters.
+- Declare Python dependencies in the pipeline's environment, pinned with `==`, never `%pip install` in source files.
 - Use `root_path` plus `libraries.glob`. Dataset names are unqualified; use a fully qualified `catalog.schema.table` name only to write to a different location than the pipeline default.
 - `development: true` suits dev targets (faster startup, no retry-on-failure). Production targets leave it off.
-- `run_as` takes a user or a service principal; use a service principal for production.
+- `run_as` takes a user or a service principal (pipelines also accept an account group); use a service principal for production.
 - Lakeflow Connect ingestion pipelines carry `ingestion_definition` instead of `libraries` and are never continuous.
 
 ## Compute
@@ -157,7 +180,7 @@ databricks bundle summary  -t dev --profile <PROFILE>
 - Parameterise catalog, schema and warehouse with `variables:`, set per `targets:` (`dev` in development mode, `prod` in production mode). A `mode: production` target must set `workspace.root_path` or validation fails. Use the deploying identity's folder, for example `/Workspace/Users/${workspace.current_user.userName}/.bundle/${bundle.name}/${bundle.target}`; `/Workspace/Shared` is writable by all users and fails `--strict`.
 - Run `bundle validate --strict` after any configuration change. Code changes only take effect after `bundle deploy`.
 - Poll the **update** (`databricks pipelines get <id>`; the update's own state and its `error.exceptions[0].message`), not the pipeline's top-level state. A first serverless run can sit in `INITIALIZING` for a few minutes; that is normal.
-- `bundle destroy` is destructive; confirm the target first.
+- `bundle destroy` is destructive; confirm the target first. Deleted UC pipelines keep their tables by default, so plan to drop them separately.
 - Pass `--profile <PROFILE>` explicitly and let the user choose; never auto-select one.
 
 ## Observability

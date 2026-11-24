@@ -11,7 +11,7 @@ Load `databricks-unity-catalog` for the commands. This file says what a pipeline
 
 ## Access control
 
-- Run production pipelines and jobs as a **service principal** (`run_as`), not a person. The deploying identity may need the Service Principal User role on it.
+- Run production pipelines and jobs as a **service principal** (`run_as`), not a person. The deploying identity may need the Service Principal User role on it. Pipelines can also run as an account group.
 - Grant to **groups**, at the narrowest securable that works, least privilege. Example for a consumer group:
 
 ```sql
@@ -38,6 +38,8 @@ GRANT SELECT      ON SCHEMA  analytics.gold TO `data_readers`;
 |---|---|
 | Did the update succeed, and why not? | Pipeline update state and `error.exceptions[0].message` (poll the update, not the pipeline); job run page |
 | Did data-quality rules pass? | Pipeline event log (`event_log(...)`, `flow_progress` events); Data quality tab (see `data-quality.md`) |
+| Are all pipelines healthy, across pipelines? | `system.lakeflow.pipelines`, `system.lakeflow.job_run_timeline`; event log as a system table (Beta: `system.lakeflow_pipeline_events_preview.pipeline_events`) |
+| Who gets paged when a flow fails? | Pipeline `notifications`, or event hooks (Python functions that call a webhook, Slack or PagerDuty) |
 | Who read or changed what? | `system.access.audit` |
 | What feeds this table (table and column lineage)? | `system.access.table_lineage` and the column lineage tables |
 | How long and how often do jobs run, and where do they fail? | Job-run system tables; job health rules |
@@ -63,5 +65,6 @@ Tag pipelines and jobs (`tags:` in the bundle: team, environment, product) so bi
 - Liquid clustering (or `CLUSTER BY AUTO`) to prune scans; avoid over-partitioning.
 - Predicate and column pruning in gold reads; pre-aggregate wide fact tables only when queries need it.
 - Lakeflow Connect is billed in DBUs; database connectors add classic-compute gateway DBUs on top of the serverless ingestion pipeline.
-- Clean up dev bundles (`bundle destroy -t dev`) after experiments, and give dev targets short retention.
+- Clean up dev bundles (`bundle destroy -t dev`) after experiments, and give dev targets short retention. Deleting a Unity Catalog pipeline **keeps** its streaming tables, materialized views and views by default; they stop updating and keep costing storage. Drop them explicitly (or delete with `cascade`) once you have confirmed nothing reads them.
+- With predictive optimization on (the default for UC managed tables), remove scheduled `OPTIMIZE` and `VACUUM` jobs; they duplicate work.
 - Review the budget with `system.billing.usage` before and after a change.

@@ -24,7 +24,8 @@ Choose the dataset type first, then layer features (Auto Loader, Auto CDC, expec
 | Aggregation, joins across the full dataset, gold marts | **Materialized view** | Batch read (`spark.read` / no `STREAM`) |
 | JDBC / federated / small static reference data | **Materialized view** | Batch read |
 | Intermediate logic reused inside the pipeline | **Temporary view** | Default for intermediate steps. Private table/MV only when materialising once saves real reprocessing |
-| Output to an external system (Kafka, external Delta, custom) | **Sink** (Python only) | `dp.create_sink`, `foreach_batch_sink` is Public Preview |
+| Output to an external system (Kafka, external Delta, custom) | **Sink** (Python only, append-only) | `dp.create_sink` with an append flow; `@dp.foreach_sink()` for per-row custom writes; `foreach_batch_sink` is Public Preview. Expectations do not run on sinks |
+| Reload a slice (a day, a region) inside the pipeline | **`REPLACE WHERE` flow** (Beta) | Incremental refresh where eligible; expectations are not supported on its target |
 | Sub-second latency | **Real-Time Mode** | Python only; `@dp.update_flow`; continuous pipeline; Public Preview |
 
 Rules that bite:
@@ -32,7 +33,8 @@ Rules that bite:
 - A streaming table cannot be changed into a materialized view in place (or the reverse). Full refresh does not fix it; drop the table or rename the dataset.
 - An aggregation over a streaming source belongs in a materialized view with a batch read, because streaming tables are append-only and will not recompute aggregates when upstream rows change.
 - Gold keeps the business dimensions people filter by (location, product, segment, time). Over-aggregating loses information that cannot be recovered.
-- Materialized view incremental refresh needs **serverless** compute and Delta row tracking (`delta.enableRowTracking = true`) on the sources. Without both it falls back to a full recompute.
+- Materialized view incremental refresh needs **serverless** compute and Delta row tracking on the sources. Tables the pipeline creates have row tracking on by default; set `delta.enableRowTracking = true` only on sources from outside the pipeline. Non-deterministic functions, and filtering on **both** ends of a date range, force a full recompute; the MV query profile shows why a refresh was not incremental.
+- Changing a stateful streaming query (watermark, aggregation or dedup keys) makes existing state incompatible and needs a full refresh of that table. Keep bronze minimal and source-faithful so silver and gold can always be rebuilt from it.
 - SQL does not support `CREATE OR REPLACE STREAMING TABLE`; use `CREATE OR REFRESH`.
 
 ## Batch vs streaming trigger
@@ -57,8 +59,10 @@ Start triggered. Triggered pipelines with `availableNow`-style incremental proce
 
 ## Layout
 
-- Use **liquid clustering** (`cluster_by=[...]` in Python, `CLUSTER BY (...)` in SQL, or `cluster_by_auto=True` / `CLUSTER BY AUTO`). `partition_cols` / `PARTITIONED BY` is legacy.
-- Cluster keys must be numeric, string, date or timestamp (not BOOLEAN, ARRAY, MAP, STRUCT or BINARY). SDP does not pre-validate this, so a bad key fails at first write.
+- Use **liquid clustering**. Default to `cluster_by_auto=True` / `CLUSTER BY AUTO`; it needs Unity Catalog managed tables and predictive optimization, and picks keys from the query workload. Use explicit keys (`cluster_by=[...]`, `CLUSTER BY (...)`) when the filter columns are known up front; you can give them as hints and still enable AUTO. `partition_cols` / `PARTITIONED BY` is legacy, and setting both partitioning and clustering on one table is an error.
+- Explicit keys: at most **four**, chosen from the columns queries filter on most. Fewer is better for tables under 10 TB, and of two highly correlated columns keep one. Use the original timestamp rather than a derived low-cardinality date column.
+- Cluster keys must be numeric, string, date or timestamp (not BOOLEAN, ARRAY, MAP, STRUCT or BINARY), and within the columns that collect statistics (the first 32 by default). SDP does not pre-validate this, so a bad key fails at first write.
+- Auto CDC targets support liquid clustering; cluster them on the key.
 
 ## Quick selection rules
 
