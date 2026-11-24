@@ -91,7 +91,8 @@ STORED AS SCD TYPE 1;
 - `APPLY AS TRUNCATE` is SCD Type 1 only.
 - Multi-column ordering: `SEQUENCE BY STRUCT(col1, col2)` in SQL, `struct("col1", "col2")` in Python.
 - SCD Type 2 adds `__START_AT` and `__END_AT`; current rows are `WHERE __END_AT IS NULL`. Use `track_history_column_list` / `TRACK HISTORY ON` to limit which columns create history rows.
-- **Periodic full snapshots** (daily extract compared with the previous state): `dp.create_auto_cdc_from_snapshot_flow` (Python) or SQL `AUTO CDC ... FROM SNAPSHOT` on DBR 18.3 or later.
+- **Periodic full snapshots** (daily extract compared with the previous state): `dp.create_auto_cdc_from_snapshot_flow` (Python) or SQL `AUTO CDC ... FROM SNAPSHOT`; check the runtime and channel requirement in `databricks-pipelines`. Expectations are not supported on snapshot CDC, so validate in the upstream view.
+- The sequence column must never be NULL and must keep the same type across runs; changing `keys` or the sequence type needs a full refresh of the target, which the user approves and runs.
 - For append-only streams with no semantic updates, `dropDuplicates` / `SELECT DISTINCT` is cheaper than Auto CDC.
 - Legacy names (`apply_changes`, `APPLY CHANGES INTO`, `import dlt`, `LIVE.`) must be migrated, not extended.
 
@@ -99,7 +100,9 @@ STORED AS SCD TYPE 1;
 
 - Aggregate on **event time**, not processing time; keep `_ingested_at` for debugging only.
 - Order Auto CDC by a sequence column so late events do not overwrite newer rows.
-- For windowed aggregations, bound state with a watermark and choose the smallest window that meets the freshness SLA. Stream-to-stream joins must be bounded by an event-time interval or state grows without limit.
+- Every stateful operation (windowed aggregation, streaming dedup) needs a watermark (`.withWatermark(...)`, SQL `WATERMARK col DELAY OF INTERVAL ...`), or state grows without bound and the aggregation is not incremental. Choose the smallest window that meets the freshness SLA.
+- Stream-to-stream joins need a watermark on **both** sides and a time-bounded join condition.
+- Stream-static joins read the static side at the start of each micro-batch; later dimension changes are not applied to facts already processed. Use a materialized view if they must be.
 - If late events land in already-aggregated gold windows, a materialized view recomputes them; a streaming-table aggregate does not.
 
 ## 5. Technical columns
@@ -119,3 +122,4 @@ Use plain Spark Structured Streaming (load `databricks-spark-structured-streamin
 - Make multi-sink writes idempotent with `txnVersion` / `txnAppId`.
 - On serverless use `trigger(availableNow=True)`; `processingTime` and `continuous` triggers are not supported. For always-on, run it in a continuous job.
 - Use a fixed-size cluster for classic streaming (no autoscaling).
+- To move an existing Structured Streaming job into a pipeline without reprocessing, import its checkpoint (`import_checkpoint`) instead of starting from scratch.

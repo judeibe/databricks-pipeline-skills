@@ -73,6 +73,12 @@ grep -rl "^# Databricks notebook source" . --include='*.py' --include='*.sql'
 
 # Writes, state and ML
 grep -rnE "MERGE INTO|REPLACE WHERE|INSERT (INTO|OVERWRITE)|saveAsTable|cloudFiles|checkpointLocation|txnVersion" . --include='*.py' --include='*.sql' --include='*.ipynb'
+
+# Side effects and anti-patterns inside pipeline source
+grep -rnE "\.collect\(|\.count\(\)|toPandas\(|\.pivot\(|PIVOT|\.save\(|saveAsTable|\.toTable\(|\.start\(|SparkSession\.builder|except( Exception| AnalysisException|:)|%pip|partition_cols|PARTITIONED BY|withWatermark|WATERMARK" . --include='*.py' --include='*.sql'
+
+# Metric views
+grep -rnE "WITH METRICS|LANGUAGE YAML|MEASURE\(" . --include='*.sql' --include='*.py' --include='*.yml' --include='*.yaml'
 grep -rlE "import mlflow|mlflow\." . --include='*.py' --include='*.ipynb'
 ```
 
@@ -87,6 +93,9 @@ For every write, classify the mechanism. Preferred order: streaming table checkp
 - Flag `UNION` of streams instead of `@dp.append_flow`.
 - Flag `MERGE` without a stable key or a recency tiebreaker.
 - Flag `REPLACE WHERE` whose predicate differs from the grain of the `SELECT`.
+- Flag dataset functions that do more than return a DataFrame: `collect()`, `count()`, `toPandas()`, `pivot()` (or SQL `PIVOT`), `save()`, `saveAsTable()`, `toTable()`, `start()`, `SparkSession.builder...getOrCreate()`. The pipeline evaluates this code several times.
+- Flag broad `try`/`except` around transformations (especially catching `AnalysisException`); it hides failures from the event log.
+- Flag `%pip install` in pipeline source; dependencies belong in the pipeline environment, pinned.
 
 ### 3. Check incremental state
 
@@ -95,10 +104,15 @@ For every write, classify the mechanism. Preferred order: streaming table checkp
 - Flag a streaming read of an upstream table that gets updates or deletes without `skipChangeCommits`.
 - Flag Zerobus or message-bus ingest with no downstream dedupe (those sources are at-least-once).
 - Flag aggregation over a streaming source inside a streaming table; that needs a materialized view with a batch read.
+- Flag stateful streaming (windowed aggregation, `dropDuplicates`) with no watermark, and stream-stream joins without a watermark on both sides.
+- Flag materialized views that cannot refresh incrementally: classic compute, non-deterministic functions, or a filter on both ends of a date range.
+- Flag a change to a stateful query's watermark or keys shipped without a planned full refresh of that table.
 
 ### 4. Check orchestration safety
 
 Per job and task: `max_retries` and `min_retry_interval_millis` are set deliberately and the task is idempotent; `timeout_seconds` is set; `max_concurrent_runs` with `queue.enabled` stops overlapping runs from writing the same data; `run_if` matches intent; triggers fit the upstream (`table_update` / `file_arrival` over fixed cron where no fixed time exists); failure notifications and `health.rules` exist. SDP resolves dependencies inside one pipeline, so job tasks should order work between pipelines and non-pipeline work, not between datasets of one pipeline. Lakeflow Connect ingestion pipelines are triggered only and need a job to schedule them.
+
+Pipeline sizing: a triggered update runs at most 16 dataset updates in parallel. Flag pipelines past that ceiling, monoliths that mix teams or latency profiles, and bronze ingestion that shares a pipeline with transformations a failure would block. Flag pipelines with no `notifications` or event hook, or that are started by hand rather than by a job or schedule.
 
 ### 5. Check backfill and recovery
 
@@ -107,6 +121,7 @@ Per job and task: `max_retries` and `min_retry_interval_millis` are set delibera
 - Rollback exists: `DESCRIBE HISTORY` / `RESTORE`, within the table's retention window.
 - Repair of failed runs is safe because tasks are idempotent.
 - A streaming table cannot be converted to a materialized view in place; flag any plan that assumes it.
+- Deleting a UC pipeline (including `bundle destroy`) keeps its tables by default. Flag tables left behind by deleted pipelines (no longer updating, still readable) and cleanup plans that assume they were dropped.
 
 ### 6. Check compute and deployment
 
@@ -115,6 +130,8 @@ Per job and task: `max_retries` and `min_retry_interval_millis` are set delibera
 - Production targets run as a **service principal** (`run_as`), not a person; `workspace.root_path` is set and is not `/Workspace/Shared`.
 - Catalog, schema and warehouse come from bundle variables, never hardcoded.
 - Resources are tagged (team, environment); permissions are explicit.
+- Clustering: liquid clustering (`CLUSTER BY AUTO` or at most four explicit keys on filter columns); no table with both partitioning and clustering; `CLUSTER BY AUTO` only where predictive optimization is on; no scheduled `OPTIMIZE` job duplicating predictive optimization.
+- Metric views: `version: 1.1`, `'on'` quoted, measures queried with `MEASURE()`, a materialization `schedule` aligned with the source pipeline, and no materialization over sources with row filters, masks or `parameters`.
 - `databricks bundle validate --strict -t <target> --profile <profile>` passes (run only once the user has chosen a profile).
 
 ### 7. Route to the area references
@@ -126,6 +143,9 @@ Open the matching reference for quality gates, lineage and governance, ML traini
 - [ ] Every write is idempotent by platform mechanism or a keyed `MERGE` / `REPLACE WHERE`; no blind append on a retryable path.
 - [ ] No legacy `dlt`, `apply_changes`, `LIVE.` or `partition_cols`; liquid clustering is used.
 - [ ] No pipeline-owned checkpoint or schema location; no UNION of streams.
+- [ ] Dataset functions only return DataFrames: no actions, writes, `try`/`except` swallowing or `%pip`.
+- [ ] Stateful streaming has watermarks; stream-stream joins bound both sides.
+- [ ] Pipelines sized by domain, layer and latency, under 16 parallel dataset updates, with notifications.
 - [ ] Incremental state comes from checkpoints or from the target table, not wall-clock time.
 - [ ] Retries are bounded, tasks have timeouts, overlapping runs are prevented or queued.
 - [ ] Triggers are data-aware where upstream timing is not fixed.
@@ -133,7 +153,8 @@ Open the matching reference for quality gates, lineage and governance, ML traini
 - [ ] Backfill is parameterised or a one-time flow; no scheduled full refresh.
 - [ ] Serverless unless a blocker is named; `performance_target` matches the SLA; environments pinned.
 - [ ] Production `run_as` is a service principal; `root_path` is not shared; variables carry catalog and schema.
-- [ ] Critical expectations fail or quarantine; none are warn-only on load-bearing tables.
+- [ ] Critical expectations fail or quarantine; none are warn-only on load-bearing tables. No expectations placed where they do not run (sinks, snapshot CDC, `REPLACE WHERE` targets).
+- [ ] No orphaned tables from deleted pipelines.
 - [ ] Models load by alias, not `@latest` or stage; sensitive columns are tagged and masked.
 
 ## Common issues & anti-patterns
@@ -147,6 +168,9 @@ Open the matching reference for quality gates, lineage and governance, ML traini
 - Hardcoded catalog or schema names that break multi-environment deploys.
 - Training that registers a model version per tuning trial, or serving that loads `@latest`.
 - Logic buried in notebooks with no tests and no parameters.
+- `count()` or `collect()` inside a dataset function "to log row counts".
+- `try`/`except` that turns a failing transformation into an empty DataFrame.
+- `expect_or_fail` relied on to stop the whole pipeline in triggered mode.
 
 ## Required output
 

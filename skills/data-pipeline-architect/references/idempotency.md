@@ -21,7 +21,7 @@ Lakeflow Jobs does not make tasks idempotent. A task that wrote partial output b
 | Latest-row-per-key, deletes, history | Auto CDC applies each event by key and sequence | `create_auto_cdc_flow` (see `ingestion-patterns.md`) |
 | Aggregates and marts | A materialized view is recomputed from its sources | `@dp.materialized_view` / `CREATE OR REFRESH MATERIALIZED VIEW` |
 | Upsert in a Jobs task | Re-applying the same latest version changes nothing | `MERGE INTO` on a stable key |
-| Reload one slice (a day, a region) | The predicate replaces exactly the slice | `INSERT INTO ... REPLACE WHERE` |
+| Reload one slice (a day, a region) | The predicate replaces exactly the slice | `INSERT INTO ... REPLACE WHERE` in a Jobs task, or a `REPLACE WHERE` flow inside the pipeline (Beta; no expectations on its target) |
 | Rebuild a whole table | Replacement is a single atomic commit | `CREATE OR REPLACE TABLE ... AS SELECT` |
 | Push ingest (Zerobus), at-least-once sources | Duplicates are collapsed by key | Dedupe downstream with Auto CDC or `MERGE` |
 | `foreachBatch` writing to several tables | Each write is tagged and skipped if already applied | `txnVersion` + `txnAppId` options |
@@ -93,6 +93,9 @@ Use one `txnAppId` per logical writer, and a deterministic `txnVersion` such as 
 
 - `DESCRIBE HISTORY table` shows each commit; `RESTORE TABLE table TO VERSION AS OF n` (or `TIMESTAMP AS OF`) rolls a bad write back.
 - **Full refresh** of a pipeline dataset reprocesses streaming sources from scratch and resets streaming state. Rows the source no longer retains cannot be recovered. Prefer selective refresh, and leave any full refresh or `RESTORE` to the user.
+- **Rewind** (Beta, PREVIEW channel, `pipelines.rewind.betaEnabled = true`) snapshots pipeline metadata and source offsets so you can roll back and reprocess from a point in time instead of a full refresh. Do not make a Beta feature the only recovery path.
+- Changes that no longer need a full refresh: Delta type widening (`INT` to `BIGINT`), and column-level `ALTER TABLE` on streaming tables (Beta, metadata-only). Changing a stateful query's watermark or keys still does.
+- Deleting a pipeline keeps its tables by default; they stop updating but are not dropped.
 - A streaming table cannot be converted to a materialized view in place; full refresh does not help.
 - Repair a failed job run to re-run only failed and skipped tasks; make sure those tasks are idempotent first.
 

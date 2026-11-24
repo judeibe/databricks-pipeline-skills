@@ -39,7 +39,7 @@ Use it to produce a pipeline design (`templates/pipeline-design.md`), to review 
 | Postgres serving, reverse ETL | `databricks-lakebase` |
 | Running and testing code, SDK | `databricks-execution-compute`, `databricks-setup-local`, `databricks-python-sdk` |
 | Test data, including bad rows | `databricks-synthetic-data-gen` |
-| Anything not covered | `databricks-docs` (llms.txt index; it has no pages for expectations, Auto Loader schema evolution, MERGE or job retries, so use the pipelines and jobs skill references for those) |
+| Anything not covered | `databricks-docs` (llms.txt index); prefer the pipelines and jobs skill references for exact syntax |
 
 Downstream consumers such as ML training, Vector Search, Agent Bricks, Model Serving and AI Functions are not part of pipeline design; record their needs in the design's consumers section.
 
@@ -81,8 +81,12 @@ Follow these steps in order, filling `templates/pipeline-design.md` as you go.
 ## Best Practices
 
 - Use the modern API: `from pyspark import pipelines as dp`, `@dp.table`, `@dp.materialized_view`, `@dp.temporary_view`, `dp.create_auto_cdc_flow`. Migrate legacy `dlt` code; do not extend it.
-- Use liquid clustering (`cluster_by`, `CLUSTER BY AUTO`), not `partition_cols`.
-- Keep one dataset per file, named after the dataset, in a `transformations/` folder.
+- Use liquid clustering, `CLUSTER BY AUTO` by default and explicit keys (at most four) when filter columns are known; never `partition_cols`.
+- Keep one dataset per file, named after the dataset, in a `transformations/` folder; put reusable, unit-tested PySpark functions in `utilities/`.
+- Dataset functions only build and return a DataFrame. The pipeline evaluates them several times, so no `collect()`, `count()`, `toPandas()`, `pivot()`, `save()`, `saveAsTable()`, `toTable()`, `start()`, and no `SparkSession.builder...getOrCreate()`.
+- Do not wrap transformations in broad `try`/`except`; it hides errors from the event log.
+- Declare Python dependencies in the pipeline environment, pinned; no `%pip install` in source.
+- Size pipelines by domain, layer and latency, and keep each under 16 parallel dataset updates (see `references/orchestration.md`).
 - Use `@dp.append_flow` for multiple sources into one table; never `UNION` streams.
 - Use a temporary view for intermediate logic, including pre-filtering before Auto CDC.
 - Authenticate to cloud storage with UC service credentials; keep secrets in secret scopes.
@@ -94,6 +98,11 @@ Follow these steps in order, filling `templates/pipeline-design.md` as you go.
 - **Blind appends on retry** duplicate rows. Use Auto CDC, `MERGE`, or `REPLACE WHERE`.
 - **Changing a dataset's type** (streaming table to materialized view or back) cannot be done in place, and full refresh does not fix it.
 - **Full refresh of a streaming table** resets streaming state and reprocesses from the source. Rows the source no longer retains cannot be recovered, so plan it as a deliberate, user-approved operation, never a default.
+- **Changing a stateful query** (watermark, aggregation or dedup keys) needs a full refresh; plan it as a user-approved operation, and keep bronze rebuildable.
+- **Stateful streaming without a watermark** grows state without bound; stream-stream joins need one on both sides.
+- **Materialized views that cannot refresh incrementally**: classic compute, non-deterministic functions, or a filter on both ends of a date range.
+- **Expecting `expect_or_fail` to stop the whole pipeline.** In triggered mode it rolls back only that flow; gate other work with a separate pipeline or job task.
+- **Assuming deleting a pipeline drops its tables.** UC pipelines keep them by default.
 - **Aggregating over a streaming source in a streaming table** never recomputes; use a materialized view with a batch read.
 - **Setting `cloudFiles.schemaLocation`, a checkpoint, or `.writeStream` inside a pipeline** conflicts with the managed ones.
 - **Treating Zerobus as exactly-once.** It is at-least-once; dedupe downstream.
@@ -124,6 +133,6 @@ This skill produces designs and files. It does not change a workspace on its own
 - `references/orchestration.md`: Lakeflow Jobs, triggers, retries, backfill and repair, pipeline and job YAML, compute, deployment.
 - `references/data-quality.md`: expectations, quarantine, event-log queries, freshness and volume checks, testing the checks.
 - `references/governance-and-observability.md`: Unity Catalog structure and grants, masks, system tables, cost levers.
-- `references/serving-and-consumers.md`: metric views, dashboards, Genie, Lakebase, Iceberg readers.
+- `references/serving-and-consumers.md`: metric views (spec, materialization, limits), dashboards, Genie, Lakebase, Iceberg readers.
 - `templates/pipeline-design.md`: fill-in design document.
 - `examples/orders-pipeline.md`: worked end-to-end example with code and bundle YAML.

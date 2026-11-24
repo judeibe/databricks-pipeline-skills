@@ -41,12 +41,27 @@ CREATE OR REFRESH STREAMING TABLE customers_clean (
 Rules:
 
 - Names are unique within the dataset and show up in metrics, so make them descriptive.
-- The condition is a SQL expression: built-in functions are fine; **no** Python UDFs, subqueries or external calls.
+- The condition is a SQL expression that returns true or false per row: built-in functions, `CASE` and date arithmetic are fine; **no** Python UDFs, subqueries over other tables or external calls. For checks that need other tables (row counts, missing keys, uniqueness), compute them in a materialized view and put the expectation on that (see "Dataset-level checks").
 - Group same-action checks with `expect_all*`; stack decorators for mixed actions.
 - On an explicit-target streaming table, use `dp.create_streaming_table(name=..., expect_all_or_drop={...})`.
-- A SQL `CREATE TEMPORARY VIEW` does not accept `CONSTRAINT`; put the expectation on the table or MV that reads it.
-- Metrics appear in the pipeline UI Data quality tab and the event log. Warn and drop actions report metrics; a failed update may not.
-- "Block promotion" means `expect_or_fail` on the promoting table, or a downstream job task gated with `depends_on` and `run_if: ALL_SUCCESS`.
+- Expectations run on streaming tables, materialized views and temporary views. They do **not** run on sinks, on `AUTO CDC ... FROM SNAPSHOT`, or on a table targeted by a `REPLACE WHERE` flow; validate in an upstream view instead. In SQL, put constraints on the table or MV; in Python, decorators work on `@dp.temporary_view`.
+- Metrics appear in the pipeline UI Data quality tab and the event log. Warn and drop actions report metrics; `fail` records none. A view queried by several datasets can report several metric sets.
+- **What `fail` stops.** In a triggered pipeline a failing flow rolls back only its own update; independent flows in the same update still complete. In a continuous pipeline the failing flow and its dependents stop. Expectations control which rows reach a dataset, not orchestration: to stop *other* work, put it in a separate pipeline or task gated with `depends_on` and `run_if: ALL_SUCCESS`.
+- Every dataset that can receive bad data gets at least one expectation; "input assumed clean" in a comment is not a check.
+- **Reusable rules:** keep rules in a Delta table (`name`, `constraint`, `tag`) or a Python module, load them with a helper such as `get_rules(tag)`, and apply with `@dp.expect_all_or_drop(get_rules("validity"))`. Expectations can also be stored and managed in Unity Catalog tables. SQL cannot load rules dynamically.
+
+### Dataset-level checks
+
+Row rules cannot see other rows. Put aggregate checks in a materialized view and fail it:
+
+```python
+@dp.materialized_view(name="orders_pk_check", private=True)
+@dp.expect_or_fail("unique_order_id", "num_entries = 1")
+def orders_pk_check():
+    return spark.read.table("silver_orders").groupBy("order_id").count().withColumnRenamed("count", "num_entries")
+```
+
+The same shape covers row-count reconciliation (`a_count = b_count` over two counts) and missing-record detection (left join, `EXPECT (r_key IS NOT NULL)`).
 
 ### Quarantine pattern
 
@@ -67,7 +82,7 @@ def silver_orders_quarantine():
     return spark.readStream.table("bronze_orders").where(QUARANTINE)
 ```
 
-Use the rescued-data quarantine in `schema-evolution.md` for parse and schema problems; use expectations for value rules. Alert when quarantine grows.
+Use the rescued-data quarantine in `schema-evolution.md` for parse and schema problems; use expectations for value rules. Alert when quarantine grows. Always derive the quarantine predicate from the same `RULES` dict so the two paths cannot drift. The Databricks docs also show a flag-column variant (`@dp.expect_all(rules)` plus an `is_quarantined` column and two views); if you use it, cluster rather than partition by the flag.
 
 ## Reading the results
 
@@ -126,7 +141,7 @@ ALTER TABLE gold.orders ALTER COLUMN order_id SET NOT NULL;
 
 ## Testing the checks
 
-Test expectations before production. Generate synthetic data with realistic skew and **inject bad rows** (nulls in keys, negative amounts, malformed JSON, a new column) using `databricks-synthetic-data-gen`, run the pipeline against a dev target, and confirm the right rows are dropped, quarantined or fail the update.
+Test expectations before production. Pipeline Python unit tests (Beta) run datasets, expectations and Auto CDC against mock data. Also generate synthetic data with realistic skew and **inject bad rows** (nulls in keys, negative amounts, malformed JSON, a new column) using `databricks-synthetic-data-gen`, run the pipeline against a dev target, and confirm the right rows are dropped, quarantined or fail the update.
 
 ## Principles
 
